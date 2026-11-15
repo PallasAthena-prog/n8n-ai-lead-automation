@@ -1,0 +1,297 @@
+{
+  "id": "followUpFlow0002",
+  "name": "2. Follow-up Scheduler",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "a38993cb-f437-5f8b-a5be-2e1adea69ebb",
+      "name": "Every Minute",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "99545c90-23a4-5808-92db-b38b19af54e3",
+              "name": "config",
+              "value": "={{ {\n  companyName: $env.COMPANY_NAME || 'Northwind Analytics',\n  companyDescription: $env.COMPANY_DESCRIPTION || 'a reporting automation platform for operations teams',\n  senderName: $env.SENDER_NAME || 'Maya from Northwind',\n  senderEmail: $env.SENDER_EMAIL || 'maya@northwind.test',\n  salesReps: ($env.SALES_REPS || 'alex@northwind.test,sam@northwind.test').split(',').map(r => r.trim()).filter(r => r),\n  bookingUrl: $env.BOOKING_URL || 'https://cal.com/northwind/intro',\n  publicUrl: ($env.PUBLIC_BASE_URL || 'http://localhost:5678').replace(/\\/+$/, ''),\n  llmEnabled: !!$env.LLM_API_KEY,\n  llmBaseUrl: ($env.LLM_BASE_URL || 'https://api.openai.com/v1').replace(/\\/+$/, ''),\n  llmModel: $env.LLM_MODEL || 'gpt-4o-mini',\n  followUpUnit: ($env.DEMO_FAST_FOLLOW_UPS || 'true') === 'true' ? '1 minute' : '1 day'\n} }}",
+              "type": "object"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "6166c66f-ddac-548e-9c38-25adfb64e95b",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "with due as (\n  select l.id,\n         exists (select 1\n                   from sequence_steps s\n                  where s.category = l.category and s.step = l.follow_up_step + 1) as has_template\n    from leads l\n   where l.status in ('new', 'contacted', 'nurturing')\n     and l.next_follow_up_at <= now()\n   order by l.next_follow_up_at\n   limit 10\n     for update of l skip locked\n), closed as (\n  -- the next step was removed from sequence_steps: end the sequence instead of waiting forever\n  update leads l\n     set next_follow_up_at = null,\n         status = 'no_response',\n         updated_at = now()\n    from due\n   where l.id = due.id and not due.has_template\n  returning l.id\n), claimed as (\n  -- a 30 minute lease: if this run dies before recording the result,\n  -- the lead becomes due again instead of being lost\n  update leads l\n     set next_follow_up_at = now() + interval '30 minutes',\n         updated_at = now()\n    from due\n   where l.id = due.id and due.has_template\n  returning l.id, l.email, l.full_name, l.company, l.category, l.follow_up_step + 1 as step,\n            l.owner_email, l.response_token, l.opening\n)\nselect c.*, s.subject, s.body,\n       exists (select 1\n                 from sequence_steps n\n                where n.category = c.category and n.step = c.step + 1) as has_next_step\n  from claimed c\n  join sequence_steps s on s.category = c.category and s.step = c.step\n order by c.id",
+        "options": {}
+      },
+      "id": "27837e63-5b6b-5a07-8609-d022bf3771a2",
+      "name": "Claim Due Follow-ups",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.8,
+      "position": [
+        440,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "crmPostgresCred1",
+          "name": "CRM Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const escapeHtml = (value) => String(value ?? '')\n  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')\n  .replace(/\"/g, '&quot;').replace(/'/g, '&#39;');\n\nfunction renderEmail(subjectTemplate, bodyTemplate, vars, links) {\n  const fill = (template, asHtml) => template.replace(/\\{\\{\\s*(\\w+)\\s*\\}\\}/g, (match, key) => {\n    if (key === 'booking_link') {\n      return asHtml\n        ? `<a href=\"${escapeHtml(links.booking)}\" style=\"display:inline-block;padding:10px 18px;background:#2f6fed;color:#ffffff;text-decoration:none;border-radius:6px\">Book a call</a>`\n        : links.booking;\n    }\n    const value = vars[key] ?? '';\n    return asHtml ? escapeHtml(value) : value;\n  });\n\n  const subject = fill(subjectTemplate, false).replace(/\\s+/g, ' ').trim();\n  const text = `${fill(bodyTemplate, false)}\\n\\n--\\nNot interested? Unsubscribe here: ${links.unsubscribe}`;\n  const paragraphs = fill(bodyTemplate, true)\n    .split(/\\n{2,}/)\n    .map((p) => `<p style=\"margin:0 0 16px\">${p.trim().replace(/\\n/g, '<br>')}</p>`)\n    .join('\\n');\n  const html = `<div style=\"font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.5;color:#1f2933;max-width:560px\">\n${paragraphs}\n<p style=\"margin-top:32px;font-size:12px;color:#7b8794\">You are getting this email because you contacted ${escapeHtml(vars.our_company)}.\n<a href=\"${escapeHtml(links.unsubscribe)}\" style=\"color:#7b8794\">Unsubscribe</a></p>\n</div>`;\n  return { subject, text, html };\n}\n\nfunction actionLinks(cfg, leadId, token) {\n  const base = `${cfg.publicUrl}/webhook/lead-action?lead=${encodeURIComponent(leadId)}&token=${encodeURIComponent(token)}`;\n  return { booking: `${base}&action=book`, unsubscribe: `${base}&action=unsubscribe` };\n}\n\nconst cfg = $('Config').first().json.config;\n\nreturn $input.all().map((item, index) => {\n  const lead = item.json;\n  const email = renderEmail(lead.subject, lead.body, {\n    first_name: (lead.full_name || '').split(' ')[0] || 'there',\n    lead_company: lead.company || 'your team',\n    our_company: cfg.companyName,\n    sender_name: cfg.senderName,\n    // only step 0 uses it, when a failed first email is retried\n    opening: lead.opening || '',\n  }, actionLinks(cfg, lead.id, lead.response_token));\n\n  return {\n    json: {\n      leadId: lead.id,\n      to: lead.email,\n      step: lead.step,\n      hasNextStep: lead.has_next_step === true,\n      replyTo: lead.owner_email || cfg.senderEmail,\n      ...email,\n    },\n    pairedItem: { item: index },\n  };\n});\n"
+      },
+      "id": "9a2bc7d5-e08b-59d6-b8f3-458e2db09af7",
+      "name": "Render Follow-up Emails",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $('Config').first().json.config.senderName }} <{{ $('Config').first().json.config.senderEmail }}>",
+        "toEmail": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "both",
+        "text": "={{ $json.text }}",
+        "options": {
+          "appendAttribution": false,
+          "replyTo": "={{ $json.replyTo }}"
+        },
+        "html": "={{ $json.html }}"
+      },
+      "id": "71c8a29b-6a9d-5bf9-9285-1c65a104f442",
+      "name": "Send Follow-up",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        880,
+        300
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "mailpitSmtpCred1",
+          "name": "Mailpit SMTP"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "8679c221-6401-55d0-a12e-c88939afe26a",
+              "leftValue": "={{ !!$json.messageId }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ad63c825-a84a-5704-b893-b630956c5912",
+      "name": "Follow-up Sent?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "with updated as (\n  update leads l\n     set follow_up_step = $5::int,\n         last_contacted_at = now(),\n         next_follow_up_at = case when $3::boolean then\n                               (select now() + s.delay_days::float8 * $2::interval\n                                  from sequence_steps s\n                                 where s.category = l.category and s.step = $5::int + 1)\n                             end,\n         status = case when not $3::boolean then 'no_response'\n                       when l.status = 'new' then case when l.category = 'cold' then 'nurturing' else 'contacted' end\n                       else l.status end,\n         updated_at = now()\n   where l.id = $1::bigint\n     and l.status in ('new', 'contacted', 'nurturing')\n  returning l.id, l.status, l.follow_up_step, l.next_follow_up_at\n)\ninsert into lead_activities (lead_id, type, detail)\nselect id,\n       case when follow_up_step = 0 then 'email_sent' else 'follow_up_sent' end,\n       jsonb_build_object('step', follow_up_step, 'subject', $4::text,\n                          'sequence_finished', status = 'no_response',\n                          'next_follow_up_at', next_follow_up_at)\n  from updated\nreturning lead_id",
+        "options": {
+          "queryReplacement": "={{ [$('Render Follow-up Emails').item.json.leadId, $('Config').first().json.config.followUpUnit, $('Render Follow-up Emails').item.json.hasNextStep, $('Render Follow-up Emails').item.json.subject, $('Render Follow-up Emails').item.json.step] }}",
+          "queryBatching": "independently"
+        }
+      },
+      "id": "4f470007-4622-5769-84bb-fbba095335fc",
+      "name": "Record Follow-up",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.8,
+      "position": [
+        1320,
+        200
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "crmPostgresCred1",
+          "name": "CRM Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "with attempts as (\n  select count(*) as failed_before\n    from lead_activities\n   where lead_id = $1::bigint\n     and type = 'email_failed'\n     and detail->>'step' = $2::text\n), updated as (\n  -- retry every 10 minutes, give up after the fifth failure of the same email\n  update leads l\n     set next_follow_up_at = case when (select failed_before from attempts) >= 4 then null\n                                  else now() + interval '10 minutes' end,\n         status = case when (select failed_before from attempts) >= 4 then 'undeliverable'\n                       else l.status end,\n         updated_at = now()\n   where l.id = $1::bigint\n     and l.status in ('new', 'contacted', 'nurturing')\n  returning l.id, l.status\n)\ninsert into lead_activities (lead_id, type, detail)\nselect id, 'email_failed',\n       jsonb_build_object('step', $2::int, 'error', $3::text, 'gave_up', status = 'undeliverable')\n  from updated\nreturning lead_id",
+        "options": {
+          "queryReplacement": "={{ [$('Render Follow-up Emails').item.json.leadId, $('Render Follow-up Emails').item.json.step, String($json.error || 'not sent').slice(0, 500)] }}",
+          "queryBatching": "independently"
+        }
+      },
+      "id": "3b8bbd5f-797e-5598-a482-736113157030",
+      "name": "Retry Later",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.8,
+      "position": [
+        1320,
+        420
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "crmPostgresCred1",
+          "name": "CRM Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Follow-ups\nRuns every minute and picks up leads whose next email is due.\n\nUp to 10 rows are claimed with FOR UPDATE SKIP LOCKED and leased for 30 minutes, so overlapping runs never email the same lead twice and a crash never loses a lead. A failed send is retried every 10 minutes; after five failures the lead is marked undeliverable.\n\nSteps and copy come from the sequence_steps table. With DEMO_FAST_FOLLOW_UPS=true one \"day\" is one minute.",
+        "height": 280,
+        "width": 480,
+        "color": 4
+      },
+      "id": "cb26206e-fb23-5930-8dc4-2adf737f689e",
+      "name": "Note: scheduler",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -40
+      ]
+    }
+  ],
+  "connections": {
+    "Every Minute": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Claim Due Follow-ups",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim Due Follow-ups": {
+      "main": [
+        [
+          {
+            "node": "Render Follow-up Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render Follow-up Emails": {
+      "main": [
+        [
+          {
+            "node": "Send Follow-up",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Follow-up": {
+      "main": [
+        [
+          {
+            "node": "Follow-up Sent?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Retry Later",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Follow-up Sent?": {
+      "main": [
+        [
+          {
+            "node": "Record Follow-up",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Retry Later",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "active": false
+}

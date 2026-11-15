@@ -1,0 +1,240 @@
+{
+  "id": "crmBoardFlow0004",
+  "name": "4. CRM Board",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "crm",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "e51a8af1-5e60-57f2-b356-fb992403a143",
+      "name": "Open CRM Board",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "964aba64-5774-59a6-9b5b-10551b487fef"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "20b5ae49-d2eb-5fb1-b0b4-eb8f91a1459c",
+              "name": "config",
+              "value": "={{ {\n  companyName: $env.COMPANY_NAME || 'Northwind Analytics',\n  companyDescription: $env.COMPANY_DESCRIPTION || 'a reporting automation platform for operations teams',\n  senderName: $env.SENDER_NAME || 'Maya from Northwind',\n  senderEmail: $env.SENDER_EMAIL || 'maya@northwind.test',\n  salesReps: ($env.SALES_REPS || 'alex@northwind.test,sam@northwind.test').split(',').map(r => r.trim()).filter(r => r),\n  bookingUrl: $env.BOOKING_URL || 'https://cal.com/northwind/intro',\n  publicUrl: ($env.PUBLIC_BASE_URL || 'http://localhost:5678').replace(/\\/+$/, ''),\n  llmEnabled: !!$env.LLM_API_KEY,\n  llmBaseUrl: ($env.LLM_BASE_URL || 'https://api.openai.com/v1').replace(/\\/+$/, ''),\n  llmModel: $env.LLM_MODEL || 'gpt-4o-mini',\n  followUpUnit: ($env.DEMO_FAST_FOLLOW_UPS || 'true') === 'true' ? '1 minute' : '1 day'\n} }}",
+              "type": "object"
+            },
+            {
+              "id": "655a51a9-c801-5bcb-b734-13cdc32e2e0a",
+              "name": "allowed",
+              "value": "={{ !$env.CRM_BOARD_TOKEN || (($json.query || {}).token || '') === $env.CRM_BOARD_TOKEN }}",
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {},
+        "includeOtherFields": true
+      },
+      "id": "de041327-344b-5a26-973b-e5867f56fc09",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "9b606492-0741-5803-a1cb-1bcc470afc71",
+              "leftValue": "={{ $json.allowed }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "fe4b54c7-994b-5ec4-9854-284469fd79b7",
+      "name": "Token OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select coalesce(json_agg(x order by x.created_at desc), '[]'::json) as leads\n  from (\n        select l.id, l.full_name, l.email, l.company, l.category, l.score, l.status,\n               l.owner_email, l.classified_by, l.summary, l.follow_up_step,\n               l.next_follow_up_at, l.last_contacted_at, l.created_at,\n               (select count(*) from lead_activities a where a.lead_id = l.id) as activity_count\n          from leads l\n         order by l.created_at desc\n         limit 200\n       ) x",
+        "options": {}
+      },
+      "id": "0956d8b7-a6ee-5a76-ae75-d45e483dae53",
+      "name": "Load Pipeline",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.8,
+      "position": [
+        660,
+        200
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "crmPostgresCred1",
+          "name": "CRM Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Config').first().json.config;\nconst leads = $input.first().json.leads || [];\n\nconst esc = (value) => String(value ?? '')\n  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;');\nconst when = (iso) => (iso ? new Date(iso).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : '');\n\nconst colors = { hot: '#d64545', warm: '#e8a33d', cold: '#4a90d9', spam: '#9aa5b1' };\nconst badge = (text, color) =>\n  `<span style=\"display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px;color:#fff;background:${color}\">${esc(text)}</span>`;\n\nconst count = (key, value) => leads.filter((l) => l[key] === value).length;\nconst tiles = [\n  ['Total leads', leads.length, '#1f2933'],\n  ['Hot', count('category', 'hot'), colors.hot],\n  ['Warm', count('category', 'warm'), colors.warm],\n  ['Cold', count('category', 'cold'), colors.cold],\n  ['Spam', count('category', 'spam'), colors.spam],\n  ['Meetings requested', count('status', 'meeting_requested'), '#2f9e6f'],\n].map(([label, value, color]) => `\n  <div style=\"flex:1 1 120px;background:#fff;border-radius:8px;padding:14px 16px;box-shadow:0 1px 2px rgba(0,0,0,.06)\">\n    <div style=\"font-size:12px;color:#7b8794\">${label}</div>\n    <div style=\"font-size:26px;font-weight:bold;color:${color}\">${value}</div>\n  </div>`).join('');\n\nconst rows = leads.map((l) => `\n  <tr>\n    <td>${esc(l.id)}</td>\n    <td><strong>${esc(l.full_name)}</strong><br><span class=\"muted\">${esc(l.email)}</span></td>\n    <td>${esc(l.company)}</td>\n    <td>${l.category ? badge(l.category, colors[l.category] || '#7b8794') : ''}</td>\n    <td>${esc(l.score)}</td>\n    <td>${esc(String(l.status || '').replace(/_/g, ' '))}</td>\n    <td>${esc(l.owner_email)}</td>\n    <td>${Number(l.follow_up_step) >= 0 ? esc(l.follow_up_step) : 'not started'}${l.next_follow_up_at ? `<br><span class=\"muted\">next ${esc(when(l.next_follow_up_at))}</span>` : ''}</td>\n    <td class=\"muted\">${esc(l.classified_by === 'llm' ? 'AI' : l.classified_by)}</td>\n    <td style=\"max-width:320px\">${esc(l.summary)}</td>\n    <td class=\"muted\">${esc(when(l.created_at))}</td>\n  </tr>`).join('');\n\nconst html = `<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>${esc(cfg.companyName)} CRM</title>\n<style>\n  body { font-family: Arial, Helvetica, sans-serif; background: #f5f7fa; color: #1f2933; margin: 0; padding: 24px 16px; }\n  h1 { font-size: 22px; margin: 0 0 4px; }\n  .muted { color: #7b8794; font-size: 12px; }\n  .wrap { overflow-x: auto; background: #fff; border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,.06); }\n  table { border-collapse: collapse; width: 100%; font-size: 14px; }\n  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #e4e7eb; vertical-align: top; }\n  th { background: #f0f2f5; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: #52606d; }\n</style></head>\n<body>\n  <h1>${esc(cfg.companyName)} lead pipeline</h1>\n  <p class=\"muted\">Newest first. Refresh to see new leads and follow-ups.</p>\n  <div style=\"display:flex;flex-wrap:wrap;gap:12px;margin:16px 0\">${tiles}</div>\n  <div class=\"wrap\"><table>\n    <thead><tr><th>#</th><th>Lead</th><th>Company</th><th>Category</th><th>Score</th><th>Status</th>\n    <th>Owner</th><th>Follow-up</th><th>By</th><th>Summary</th><th>Created</th></tr></thead>\n    <tbody>${rows || '<tr><td colspan=\"11\" class=\"muted\">No leads yet. Run: bash scripts/send-sample-leads.sh</td></tr>'}</tbody>\n  </table></div>\n</body></html>`;\n\nreturn [{ json: { html } }];\n"
+      },
+      "id": "a700877e-28a6-5049-9ec5-8c8f5a5c1cd3",
+      "name": "Render Board",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        }
+      },
+      "id": "000dfed6-ed14-5439-b7d5-7e32b0f56fd9",
+      "name": "Show Board",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1100,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "<!doctype html><html><body style=\"font-family:Arial,sans-serif;padding:40px\">Add ?token=... to open the CRM board.</body></html>",
+        "options": {
+          "responseCode": 401,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        }
+      },
+      "id": "e8c8f232-45e4-59f4-92cd-25088f736641",
+      "name": "Deny Access",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        660,
+        420
+      ]
+    }
+  ],
+  "connections": {
+    "Open CRM Board": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Token OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Token OK?": {
+      "main": [
+        [
+          {
+            "node": "Load Pipeline",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Deny Access",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Pipeline": {
+      "main": [
+        [
+          {
+            "node": "Render Board",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render Board": {
+      "main": [
+        [
+          {
+            "node": "Show Board",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "active": false
+}

@@ -1,0 +1,591 @@
+{
+  "id": "leadReplyFlow003",
+  "name": "3. Lead Actions (Book / Unsubscribe)",
+  "nodes": [
+    {
+      "parameters": {
+        "multipleMethods": true,
+        "httpMethod": [
+          "GET",
+          "POST"
+        ],
+        "path": "lead-action",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "8ebf9aea-c741-5091-a8f4-7483bfaf2b39",
+      "name": "Email Link",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "5b962d2c-af40-5082-9507-83ff5eaf8282"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ecc29035-d79c-54a5-aebd-b054ecd5b3c6",
+              "name": "config",
+              "value": "={{ {\n  companyName: $env.COMPANY_NAME || 'Northwind Analytics',\n  companyDescription: $env.COMPANY_DESCRIPTION || 'a reporting automation platform for operations teams',\n  senderName: $env.SENDER_NAME || 'Maya from Northwind',\n  senderEmail: $env.SENDER_EMAIL || 'maya@northwind.test',\n  salesReps: ($env.SALES_REPS || 'alex@northwind.test,sam@northwind.test').split(',').map(r => r.trim()).filter(r => r),\n  bookingUrl: $env.BOOKING_URL || 'https://cal.com/northwind/intro',\n  publicUrl: ($env.PUBLIC_BASE_URL || 'http://localhost:5678').replace(/\\/+$/, ''),\n  llmEnabled: !!$env.LLM_API_KEY,\n  llmBaseUrl: ($env.LLM_BASE_URL || 'https://api.openai.com/v1').replace(/\\/+$/, ''),\n  llmModel: $env.LLM_MODEL || 'gpt-4o-mini',\n  followUpUnit: ($env.DEMO_FAST_FOLLOW_UPS || 'true') === 'true' ? '1 minute' : '1 day'\n} }}",
+              "type": "object"
+            }
+          ]
+        },
+        "options": {},
+        "includeOtherFields": true
+      },
+      "id": "b586a39c-7c20-5109-aae8-78be2d04b23c",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Email links look like /webhook/lead-action?lead=12&token=<uuid>&action=book\n// The confirmation form posts the same fields plus confirm=yes in the body.\nconst input = $input.first().json;\nconst query = input.query || {};\nconst body = input.body && typeof input.body === 'object' ? input.body : {};\nconst pick = (key) => String(body[key] ?? query[key] ?? '');\n\nconst leadId = pick('lead');\nconst token = pick('token');\nconst action = pick('action');\n\nconst ok = /^\\d{1,18}$/.test(leadId)\n  && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token)\n  && ['book', 'unsubscribe'].includes(action);\n\nreturn [{ json: { ok, confirmed: body.confirm === 'yes', leadId, token, action } }];\n"
+      },
+      "id": "104d02f3-ee1b-5061-98c6-265619a1eaaa",
+      "name": "Check Link",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "d75e258d-530a-57c4-a0cf-a478a2612e37",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "26eab71c-6f03-56a6-b676-800cd16d77e9",
+      "name": "Link Looks Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "25a8f437-abe6-5ff6-a7e4-1f7e4f5c701f",
+              "leftValue": "={{ $json.confirmed }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ddb0a579-3162-58b2-a791-2dd0e902b9d5",
+      "name": "Confirmed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        880,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ `<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>${$json.action === 'book' ? 'Book a call' : 'Unsubscribe'}</title></head>\n<body style=\"font-family:Arial,Helvetica,sans-serif;background:#f5f7fa;color:#1f2933;margin:0;padding:48px 16px\">\n<div style=\"max-width:480px;margin:0 auto;background:#fff;border-radius:10px;padding:32px;box-shadow:0 1px 3px rgba(0,0,0,.08)\">\n<h1 style=\"font-size:22px;margin:0 0 12px\">${$json.action === 'book' ? 'Book a call with ' + $('Config').first().json.config.companyName : 'Unsubscribe from our emails?'}</h1>\n<p style=\"margin:0 0 24px;line-height:1.5\">${$json.action === 'book' ? 'Pick a time that suits you in our calendar. We will stop sending reminder emails.' : 'You will not get any more follow-up emails from ' + $('Config').first().json.config.companyName + '.'}</p>\n<form method=\"post\" action=\"${$('Config').first().json.config.publicUrl}/webhook/lead-action\">\n<input type=\"hidden\" name=\"lead\" value=\"${$json.leadId}\">\n<input type=\"hidden\" name=\"token\" value=\"${$json.token}\">\n<input type=\"hidden\" name=\"action\" value=\"${$json.action}\">\n<input type=\"hidden\" name=\"confirm\" value=\"yes\">\n<button type=\"submit\" style=\"padding:12px 20px;border:0;border-radius:6px;background:#2f6fed;color:#fff;font-size:15px;cursor:pointer\">${$json.action === 'book' ? 'Continue to the calendar' : 'Yes, unsubscribe me'}</button>\n</form>\n</div></body></html>` }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        }
+      },
+      "id": "25251e1d-9a98-5431-b902-fe8101ca4b76",
+      "name": "Ask to Confirm",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1100,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "with target as (\n  select id, status as old_status\n    from leads\n   where id = $1::bigint\n     and response_token = $2::uuid\n     and status <> 'disqualified'\n     for update\n), updated as (\n  update leads l\n     set status = case when $3::text = 'book' then 'meeting_requested' else 'unsubscribed' end,\n         next_follow_up_at = null,\n         updated_at = now()\n    from target t\n   where l.id = t.id\n  returning l.id, l.full_name, l.email, l.company, l.owner_email, l.category, l.score, l.summary,\n            l.status, t.old_status\n), logged as (\n  -- only log real changes, so a second click does not notify anyone again\n  insert into lead_activities (lead_id, type, detail)\n  select id, status, jsonb_build_object('previous_status', old_status)\n    from updated\n   where old_status is distinct from status\n)\nselect $3::text as action,\n       coalesce((select row_to_json(u) from updated u), '{}'::json) as lead,\n       coalesce((select u.old_status is distinct from u.status from updated u), false) as changed",
+        "options": {
+          "queryReplacement": "={{ [$json.leadId, $json.token, $json.action] }}"
+        }
+      },
+      "id": "3fc54307-2431-5942-8336-d303b6c51bf0",
+      "name": "Apply Action in CRM",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.8,
+      "position": [
+        1100,
+        120
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "crmPostgresCred1",
+          "name": "CRM Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "2e8ef235-b3cf-5a9c-bfca-5c5f6b5b42d4",
+                    "leftValue": "={{ $json.lead.id ? $json.action : 'invalid' }}",
+                    "rightValue": "book",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Book"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "2142c940-1deb-51e3-b4e3-c405f03df484",
+                    "leftValue": "={{ $json.lead.id ? $json.action : 'invalid' }}",
+                    "rightValue": "unsubscribe",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Unsubscribe"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "3759123f-345c-520c-b209-a7209dd7bab2",
+                    "leftValue": "={{ $json.lead.id ? $json.action : 'invalid' }}",
+                    "rightValue": "invalid",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Invalid"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "5e1bdd82-8f8e-57f1-a36e-7f15832e0616",
+      "name": "Outcome",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1320,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "redirect",
+        "redirectURL": "={{ $('Config').first().json.config.bookingUrl }}",
+        "options": {
+          "responseCode": 303
+        }
+      },
+      "id": "6f7b7f98-ce16-5db0-8a86-582be383ec9e",
+      "name": "Redirect to Calendar",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1540,
+        -40
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "e2a9418a-f1f3-53f1-9db9-1d26684ed6e3",
+              "leftValue": "={{ $json.changed }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "91f6d736-94fc-5c69-b49e-2219c98c2629",
+      "name": "First Request?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1760,
+        -40
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $('Config').first().json.config.senderName }} <{{ $('Config').first().json.config.senderEmail }}>",
+        "toEmail": "={{ $json.lead.owner_email || $('Config').first().json.config.salesReps[0] || $('Config').first().json.config.senderEmail }}",
+        "subject": "=Meeting requested: {{ $json.lead.full_name }}{{ $json.lead.company ? ', ' + $json.lead.company : '' }}",
+        "emailFormat": "text",
+        "text": "={{ [\n  $json.lead.full_name + ' confirmed they want a call and is on their way to your calendar.',\n  '',\n  'Category: ' + $json.lead.category + ' (score ' + $json.lead.score + ')',\n  'Summary: ' + ($json.lead.summary || 'n/a'),\n  'Email: ' + $json.lead.email,\n  '',\n  'Automatic follow-ups for this lead have stopped.'\n].join('\\n') }}",
+        "options": {
+          "appendAttribution": false,
+          "replyTo": "={{ $json.lead.email }}"
+        }
+      },
+      "id": "cc04842b-766c-5b8b-8114-3602ed46ca62",
+      "name": "Tell Owner About Meeting",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1980,
+        -120
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "mailpitSmtpCred1",
+          "name": "Mailpit SMTP"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into lead_activities (lead_id, type, detail)\nvalues ($1::bigint, $2::text, jsonb_build_object('error', $3::text))",
+        "options": {
+          "queryReplacement": "={{ [$('Apply Action in CRM').first().json.lead.id, $json.messageId ? 'owner_notified' : 'owner_notify_failed', $json.messageId ? null : String($json.error || 'not sent').slice(0, 500)] }}"
+        }
+      },
+      "id": "11b570b9-98c4-5ea2-98bf-5d61b1cfab4b",
+      "name": "Log Owner Notification",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.8,
+      "position": [
+        2200,
+        -120
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "crmPostgresCred1",
+          "name": "CRM Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "e87b80f9-ebf5-5488-9bd4-37ba18cd3be8",
+      "name": "Already Requested",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1980,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ `<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>Unsubscribed</title></head>\n<body style=\"font-family:Arial,Helvetica,sans-serif;background:#f5f7fa;color:#1f2933;margin:0;padding:48px 16px\">\n<div style=\"max-width:480px;margin:0 auto;background:#fff;border-radius:10px;padding:32px;box-shadow:0 1px 3px rgba(0,0,0,.08)\">\n<h1 style=\"font-size:22px;margin:0 0 12px\">You're unsubscribed</h1>\n<p style=\"margin:0;line-height:1.5\">You won't get any more follow-up emails from ${$('Config').first().json.config.companyName}. If that was a mistake, just reply to one of our emails.</p>\n</div></body></html>` }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        }
+      },
+      "id": "35ad5158-c362-5a05-90c5-6fb514988fd6",
+      "name": "Show Unsubscribe Page",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1540,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ `<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>Link not valid</title></head>\n<body style=\"font-family:Arial,Helvetica,sans-serif;background:#f5f7fa;color:#1f2933;margin:0;padding:48px 16px\">\n<div style=\"max-width:480px;margin:0 auto;background:#fff;border-radius:10px;padding:32px;box-shadow:0 1px 3px rgba(0,0,0,.08)\">\n<h1 style=\"font-size:22px;margin:0 0 12px\">This link isn't valid</h1>\n<p style=\"margin:0;line-height:1.5\">It may be incomplete or out of date. Reply to the email you received and we'll sort it out.</p>\n</div></body></html>` }}",
+        "options": {
+          "responseCode": 404,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        }
+      },
+      "id": "48455a49-aabe-5663-9451-d500d4aeee37",
+      "name": "Show Invalid Link Page",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1540,
+        400
+      ]
+    }
+  ],
+  "connections": {
+    "Email Link": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Check Link",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Link": {
+      "main": [
+        [
+          {
+            "node": "Link Looks Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Link Looks Valid?": {
+      "main": [
+        [
+          {
+            "node": "Confirmed?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Show Invalid Link Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirmed?": {
+      "main": [
+        [
+          {
+            "node": "Apply Action in CRM",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Ask to Confirm",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Action in CRM": {
+      "main": [
+        [
+          {
+            "node": "Outcome",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Outcome": {
+      "main": [
+        [
+          {
+            "node": "Redirect to Calendar",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Show Unsubscribe Page",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Show Invalid Link Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redirect to Calendar": {
+      "main": [
+        [
+          {
+            "node": "First Request?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "First Request?": {
+      "main": [
+        [
+          {
+            "node": "Tell Owner About Meeting",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Already Requested",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tell Owner About Meeting": {
+      "main": [
+        [
+          {
+            "node": "Log Owner Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "active": false
+}

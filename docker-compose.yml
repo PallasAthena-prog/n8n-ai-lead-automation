@@ -1,0 +1,76 @@
+name: n8n-lead-automation
+
+x-n8n-common: &n8n-common
+  image: n8nio/n8n:2.46.3
+  env_file: .env
+  environment: &n8n-env
+    N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?Set N8N_ENCRYPTION_KEY in .env}
+    CRM_DB_PASSWORD: ${CRM_DB_PASSWORD:-crm_dev_password}
+    GENERIC_TIMEZONE: ${TIMEZONE:-Europe/London}
+    TZ: ${TIMEZONE:-Europe/London}
+    # The workflows read their settings (company name, LLM key, ...) from environment variables.
+    N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+    N8N_DIAGNOSTICS_ENABLED: "false"
+    N8N_RUNNERS_ENABLED: "true"
+  volumes:
+    - n8n-data:/home/node/.n8n
+
+services:
+  postgres:
+    image: postgres:17.11-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: crm
+      POSTGRES_PASSWORD: ${CRM_DB_PASSWORD:-crm_dev_password}
+      POSTGRES_DB: crm
+    volumes:
+      - crm-data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    ports:
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crm -d crm"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  mailpit:
+    image: axllent/mailpit:v1.32.0
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8025:8025"
+
+  # Imports credentials and workflows into a fresh n8n volume, then exits.
+  n8n-import:
+    <<: *n8n-common
+    entrypoint: ["/bin/sh", "/import/import.sh"]
+    volumes:
+      - n8n-data:/home/node/.n8n
+      - ./n8n:/import:ro
+    restart: "no"
+
+  n8n:
+    <<: *n8n-common
+    restart: unless-stopped
+    environment:
+      <<: *n8n-env
+      N8N_HOST: localhost
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: http
+      WEBHOOK_URL: ${PUBLIC_BASE_URL:-http://localhost:5678}/
+    ports:
+      - "127.0.0.1:5678:5678"
+    # lets the workflows reach an LLM running on the host, e.g. Ollama (needed on Linux, harmless elsewhere)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+      n8n-import:
+        condition: service_completed_successfully
+
+volumes:
+  crm-data:
+  n8n-data:
